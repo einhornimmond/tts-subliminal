@@ -1,0 +1,11 @@
+# build output
+/target
+
+# downloaded TTS models
+/models
+
+# local settings (template: .env.dist)
+.env
+
+# generated audio
+*.wav
