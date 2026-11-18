@@ -1,0 +1,26 @@
+[package]
+name = "tts_subliminal"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[features]
+default = ["static"]
+static = ["sherpa-onnx/static"]
+# CUDA: build with --no-default-features --features shared and SHERPA_ONNX_LIB_DIR
+# pointing at a sherpa-onnx CUDA build (its DLLs must then sit next to the .exe).
+shared = ["sherpa-onnx/shared"]
+
+[dependencies]
+# shortcut: pinned to the last release with built-in espeak-ng phonemizer (2.x dropped it,
+# Piper/Kokoro then need an external one); upgrade when switching to Supertonic or lexicon models.
+sherpa-onnx = { version = "=1.13.8", default-features = false }
+# same versions sherpa-onnx-sys already builds with
+ureq = "2.12"
+bzip2 = "0.4"
+tar = "0.4"
+hound = "3"
+dotenvy = "0.15"
+
+[profile.release]
+strip = true
