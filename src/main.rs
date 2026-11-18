@@ -159,14 +159,13 @@ fn main() -> Res<()> {
         None => download_model(&model_path)?,
     };
     println!("Model: {}", model_dir.display());
-    let provider = var("PROVIDER", "cpu".to_string());
-    // Without this DLL sherpa-onnx silently falls back to the CPU with a misleading hint.
-    if provider == "cuda"
-        && cfg!(windows)
-        && !env::current_exe()?.with_file_name("onnxruntime_providers_cuda.dll").exists()
-    {
-        return Err("PROVIDER=cuda, but onnxruntime_providers_cuda.dll is not next to the \
-                    executable, so this is a CPU build. See the CUDA section of the README."
+    // a CUDA build uses the GPU unless .env says otherwise
+    let default_provider = if cfg!(feature = "cuda") { "cuda" } else { "cpu" };
+    let provider = var("PROVIDER", default_provider.to_string()).trim().to_lowercase();
+    // Otherwise sherpa-onnx silently falls back to the CPU with a misleading hint.
+    if provider == "cuda" && !cfg!(feature = "cuda") {
+        return Err("PROVIDER=cuda, but this is a CPU build. \
+                    Rebuild with `cargo build --release --features cuda`."
             .into());
     }
     let tts = load_tts(&model_dir, &provider)?;
@@ -179,6 +178,7 @@ fn main() -> Res<()> {
     } else {
         1
     };
+    println!("Provider: {provider}, worker threads: {workers}");
     let (next, done) = (AtomicUsize::new(0), AtomicUsize::new(0));
     let finished: Option<Vec<Vec<(usize, Vec<f32>)>>> = thread::scope(|scope| {
         let handles: Vec<_> = (0..workers)

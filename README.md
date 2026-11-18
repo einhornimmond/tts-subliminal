@@ -53,7 +53,7 @@ Settings live in a `.env` file in the working directory. Copy `.env.dist` to
 | Variable | Default | Meaning |
 |---|---|---|
 | `MODEL_PATH` | `models` | Folder that holds the TTS model |
-| `PROVIDER` | `cpu` | `cpu` or `cuda` (see below) |
+| `PROVIDER` | `cpu` (`cuda` in a CUDA build) | `cpu` or `cuda` (see below) |
 | `VOICE_DB` | `-30` | Voice level in dB; lower = more hidden |
 | `MINUTES` | `30` | Track length; the affirmations repeat |
 | `SPEAKER` | `0` | Speaker id for multi-voice models (Kokoro: 0–10) |
@@ -78,31 +78,23 @@ evidence for the effects of monaural beats and subliminals is weak.
 
 ## CUDA
 
-The default build runs on the CPU, even with `PROVIDER=cuda`. For a list of
-affirmations that is enough: speech generation finishes in seconds.
+Windows only, and so far tested only up to the point of producing the files:
 
-GPU use needs a build against the CUDA variant of sherpa-onnx. The steps
-below are for Windows with CUDA 12; they have not been tested end to end.
+```
+cargo build --release --features cuda
+```
 
-1. From the [sherpa-onnx v1.13.8 release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.8)
-   download exactly this file (567 MB) and unpack it, e.g. with `tar -xf`:
-   `sherpa-onnx-v1.13.8-cuda-12.x-cudnn-9.x-onnxruntime1.28.2-win-x64-cuda.tar.bz2`.
-   The other `win-x64-shared-*` files on that page are CPU builds.
-2. In the same terminal you build in, point `SHERPA_ONNX_LIB_DIR` at the
-   `lib` folder inside the unpacked archive:
-   - PowerShell: `$env:SHERPA_ONNX_LIB_DIR = "C:\path\to\sherpa-onnx-v1.13.8-cuda-...-win-x64-cuda\lib"`
-   - cmd: `set SHERPA_ONNX_LIB_DIR=C:\path\to\sherpa-onnx-v1.13.8-cuda-...-win-x64-cuda\lib`
-3. Build with `cargo build --release --no-default-features --features shared`.
-   The build copies the DLLs from that folder next to the `.exe` by itself.
-4. Set `PROVIDER=cuda` in `.env`.
+The build downloads the CUDA runtime of sherpa-onnx once (about 570 MB, so the
+first build sits at the build-script step for a few minutes) and puts seven
+DLLs next to `target\release\tts_subliminal.exe`. The program then uses the
+GPU by default; `PROVIDER=cpu` in `.env` switches back. To move the program
+somewhere else, copy the `.exe` together with those DLLs.
 
-CUDA 12 and cuDNN 9 runtime libraries must be installed and on the `PATH`.
+Requirements on the machine: an NVIDIA GPU with a current driver, plus the
+CUDA 12 and cuDNN 9 runtime libraries installed and on the `PATH`.
 
-**Check:** `target\release` must contain `onnxruntime_providers_cuda.dll`
-(about 474 MB). If it is missing, step 2 did not take effect: without the
-variable the build silently downloads the CPU libraries instead. In that case
-sherpa-onnx prints `Please compile with -DSHERPA_ONNX_ENABLE_GPU=ON ...
-Fallback to cpu!`; this program stops with its own error before that.
+A plain `cargo build --release` afterwards goes back to the static CPU binary.
+The DLLs left in `target\release` do no harm; that build does not load them.
 
 ## Notes
 

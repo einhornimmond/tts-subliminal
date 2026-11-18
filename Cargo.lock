@@ -888,6 +888,7 @@ dependencies = [
  "dotenvy",
  "hound",
  "sherpa-onnx",
+ "sherpa-onnx-sys",
  "tar",
  "ureq",
 ]

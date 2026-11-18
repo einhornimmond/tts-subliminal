@@ -5,22 +5,27 @@ edition = "2021"
 license = "GPL-3.0-or-later"
 
 [features]
-default = ["static"]
-static = ["sherpa-onnx/static"]
-# CUDA: build with --no-default-features --features shared and SHERPA_ONNX_LIB_DIR
-# pointing at a sherpa-onnx CUDA build (its DLLs must then sit next to the .exe).
-shared = ["sherpa-onnx/shared"]
+# Windows only: `cargo build --release --features cuda`. build.rs downloads the CUDA runtime
+# DLLs (about 570 MB, once) and puts them next to the .exe. Without it: one static CPU binary.
+cuda = ["sherpa-onnx/shared"]
 
 [dependencies]
 # shortcut: pinned to the last release with built-in espeak-ng phonemizer (2.x dropped it,
 # Piper/Kokoro then need an external one); upgrade when switching to Supertonic or lexicon models.
 sherpa-onnx = { version = "=1.13.8", default-features = false }
+# direct dependency only so that its build script runs before ours (see build.rs)
+sherpa-onnx-sys = { version = "=1.13.8", default-features = false }
 # same versions sherpa-onnx-sys already builds with
 ureq = "2.12"
 bzip2 = "0.4"
 tar = "0.4"
 hound = "3"
 dotenvy = "0.15"
+
+[build-dependencies]
+ureq = "2.12"
+bzip2 = "0.4"
+tar = "0.4"
 
 [profile.release]
 strip = true
