@@ -81,17 +81,28 @@ evidence for the effects of monaural beats and subliminals is weak.
 The default build runs on the CPU, even with `PROVIDER=cuda`. For a list of
 affirmations that is enough: speech generation finishes in seconds.
 
-GPU use needs a build against a CUDA variant of sherpa-onnx. This path is
-untested:
+GPU use needs a build against the CUDA variant of sherpa-onnx. The steps
+below are for Windows with CUDA 12; they have not been tested end to end.
 
-1. Download a CUDA build of sherpa-onnx 1.13.8 for Windows from the
-   [sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases) and
-   unpack it.
-2. Point `SHERPA_ONNX_LIB_DIR` at its `lib` folder.
+1. From the [sherpa-onnx v1.13.8 release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.8)
+   download exactly this file (567 MB) and unpack it, e.g. with `tar -xf`:
+   `sherpa-onnx-v1.13.8-cuda-12.x-cudnn-9.x-onnxruntime1.28.2-win-x64-cuda.tar.bz2`.
+   The other `win-x64-shared-*` files on that page are CPU builds.
+2. In the same terminal you build in, point `SHERPA_ONNX_LIB_DIR` at the
+   `lib` folder inside the unpacked archive:
+   - PowerShell: `$env:SHERPA_ONNX_LIB_DIR = "C:\path\to\sherpa-onnx-v1.13.8-cuda-...-win-x64-cuda\lib"`
+   - cmd: `set SHERPA_ONNX_LIB_DIR=C:\path\to\sherpa-onnx-v1.13.8-cuda-...-win-x64-cuda\lib`
 3. Build with `cargo build --release --no-default-features --features shared`.
-4. Put the DLLs from the CUDA build next to the `.exe` and set `PROVIDER=cuda`.
+   The build copies the DLLs from that folder next to the `.exe` by itself.
+4. Set `PROVIDER=cuda` in `.env`.
 
-The CUDA and cuDNN runtime libraries matching that build must be installed too.
+CUDA 12 and cuDNN 9 runtime libraries must be installed and on the `PATH`.
+
+**Check:** `target\release` must contain `onnxruntime_providers_cuda.dll`
+(about 474 MB). If it is missing, step 2 did not take effect: without the
+variable the build silently downloads the CPU libraries instead. In that case
+sherpa-onnx prints `Please compile with -DSHERPA_ONNX_ENABLE_GPU=ON ...
+Fallback to cpu!`; this program stops with its own error before that.
 
 ## Notes
 

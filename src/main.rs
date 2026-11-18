@@ -160,6 +160,15 @@ fn main() -> Res<()> {
     };
     println!("Model: {}", model_dir.display());
     let provider = var("PROVIDER", "cpu".to_string());
+    // Without this DLL sherpa-onnx silently falls back to the CPU with a misleading hint.
+    if provider == "cuda"
+        && cfg!(windows)
+        && !env::current_exe()?.with_file_name("onnxruntime_providers_cuda.dll").exists()
+    {
+        return Err("PROVIDER=cuda, but onnxruntime_providers_cuda.dll is not next to the \
+                    executable, so this is a CPU build. See the CUDA section of the README."
+            .into());
+    }
     let tts = load_tts(&model_dir, &provider)?;
 
     let config = GenerationConfig { sid: var("SPEAKER", 0), ..Default::default() };
