@@ -10,6 +10,8 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
     str::FromStr,
+    sync::atomic::{AtomicUsize, Ordering},
+    thread,
 };
 
 type Res<T> = Result<T, Box<dyn Error>>;
@@ -68,7 +70,11 @@ fn download_model(dir: &Path) -> Res<PathBuf> {
 
 fn load_tts(model_dir: &Path, provider: &str) -> Res<OfflineTts> {
     let file = |f: &str| Some(model_dir.join(f).to_string_lossy().into_owned());
-    let mut model = OfflineTtsModelConfig { provider: Some(provider.into()), ..Default::default() };
+    let mut model = OfflineTtsModelConfig {
+        provider: Some(provider.into()),
+        num_threads: 1, // parallelism comes from one worker per core in main
+        ..Default::default()
+    };
     if model_dir.join("voices.bin").is_file() {
         model.kokoro = OfflineTtsKokoroModelConfig {
             model: file("model.onnx"),
@@ -153,17 +159,44 @@ fn main() -> Res<()> {
         None => download_model(&model_path)?,
     };
     println!("Model: {}", model_dir.display());
-    let tts = load_tts(&model_dir, &var("PROVIDER", "cpu".to_string()))?;
+    let provider = var("PROVIDER", "cpu".to_string());
+    let tts = load_tts(&model_dir, &provider)?;
 
     let config = GenerationConfig { sid: var("SPEAKER", 0), ..Default::default() };
-    let mut clips = Vec::new();
-    for (i, line) in lines.iter().enumerate() {
-        println!("[{}/{}] {line}", i + 1, lines.len());
-        let audio = tts
-            .generate_with_config(line, &config, None::<fn(&[f32], f32) -> bool>)
-            .ok_or("speech generation failed")?;
-        clips.push(audio.samples().to_vec());
-    }
+    // One shared model, one worker per core; each worker pulls the next line.
+    // On the GPU a single worker is enough, more would only fight over VRAM.
+    let workers = if provider == "cpu" {
+        thread::available_parallelism().map_or(1, |n| n.get()).min(lines.len())
+    } else {
+        1
+    };
+    let (next, done) = (AtomicUsize::new(0), AtomicUsize::new(0));
+    let finished: Option<Vec<Vec<(usize, Vec<f32>)>>> = thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut mine = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(line) = lines.get(i) else { break };
+                        let audio = tts.generate_with_config(
+                            line,
+                            &config,
+                            None::<fn(&[f32], f32) -> bool>,
+                        )?;
+                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                        println!("[{n}/{}] {line}", lines.len());
+                        mine.push((i, audio.samples().to_vec()));
+                    }
+                    Some(mine)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().expect("worker panicked")).collect()
+    });
+    let mut clips: Vec<_> = finished.ok_or("speech generation failed")?.into_iter().flatten().collect();
+    clips.sort_by_key(|(position, _)| *position); // back into file order
+    let clips: Vec<Vec<f32>> = clips.into_iter().map(|(_, clip)| clip).collect();
 
     let sr = tts.sample_rate() as u32;
     let track = mix(&clips, sr as usize, var("MINUTES", 30.0), var("VOICE_DB", -30.0));

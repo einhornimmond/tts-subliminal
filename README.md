@@ -97,6 +97,9 @@ The CUDA and cuDNN runtime libraries matching that build must be installed too.
 
 - **Version pin:** `sherpa-onnx` is pinned to 1.13.8. From 2.0 on, the built-in
   phonemizer that the Piper models need is gone.
+- **Speed:** in CPU mode the affirmations are synthesized in parallel, one
+  worker per logical core, so progress lines appear out of order. The track
+  keeps the order of the input file.
 - **Tests:** `cargo test` checks the beat progression and the mixing.
 
 ## License
