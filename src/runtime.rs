@@ -2,7 +2,10 @@
 //! They are unpacked into a folder beside it and loaded from there by full path, before
 //! the first sherpa-onnx call (the DLL is delay-loaded, see build.rs). Only the NVIDIA
 //! libraries (CUDA, cuDNN) have to be installed on the machine.
-use std::{env, error::Error, ffi::c_void, fs, io, os::windows::ffi::OsStrExt, ptr};
+use std::{
+    env, error::Error, ffi::c_void, ffi::OsStr, fs, io, os::windows::ffi::OsStrExt, path::PathBuf,
+    ptr,
+};
 
 macro_rules! embedded {
     ($name:literal) => {
@@ -26,7 +29,46 @@ extern "system" {
     fn FreeLibrary(module: *mut c_void) -> i32;
 }
 
+fn load_library(name: &OsStr, flags: u32) -> *mut c_void {
+    let wide: Vec<u16> = name.encode_wide().chain([0]).collect();
+    // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the call.
+    unsafe { LoadLibraryExW(wide.as_ptr(), ptr::null_mut(), flags) }
+}
+
+/// Why the CUDA provider did not load: NVIDIA DLLs missing, or present in the wrong version.
+fn nvidia_problem(cause: io::Error) -> String {
+    let major = env!("CUDA_MAJOR");
+    // the provider imports these directly; cuDNN is only loaded later, on first use
+    let missing: Vec<String> = ["cudart", "cublas", "cublasLt"]
+        .iter()
+        .map(|lib| format!("{lib}64_{major}.dll"))
+        .filter(|dll| load_library(dll.as_ref(), 0).is_null())
+        .collect();
+    if missing.is_empty() {
+        format!(
+            "cannot load the CUDA provider: {cause}\n\
+             The CUDA {major} libraries were found, but in a version that does not fit this \
+             build. Run `where cudart64_{major}.dll` to see which toolkit is used; the first \
+             hit must be the toolkit this program was built for. Or set PROVIDER=cpu."
+        )
+    } else {
+        format!(
+            "cannot load the CUDA provider: {cause}\n\
+             Not found: {}. Add the folder of the CUDA {major} toolkit that holds them \
+             (bin or bin\\x64) to the PATH and open a new terminal. Or set PROVIDER=cpu.",
+            missing.join(", ")
+        )
+    }
+}
+
 pub fn load(use_gpu: bool) -> Result<(), Box<dyn Error>> {
+    // The toolkit's DLL folder is not always on the PATH (CUDA 13 moved it to bin\x64).
+    if let Some(root) = env::var_os("CUDA_PATH") {
+        let bin = PathBuf::from(root).join("bin");
+        let path = env::var_os("PATH").unwrap_or_default();
+        let dirs = [bin.join("x64"), bin].into_iter().chain(env::split_paths(&path));
+        env::set_var("PATH", env::join_paths(dirs)?);
+    }
     let dir = env::current_exe()?.with_file_name("tts_subliminal_runtime");
     fs::create_dir_all(&dir)?;
     for (name, bytes) in DLLS {
@@ -39,20 +81,11 @@ pub fn load(use_gpu: bool) -> Result<(), Box<dyn Error>> {
         if name == GPU_ONLY && !use_gpu {
             continue;
         }
-        let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
-        // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives the call.
-        let module =
-            unsafe { LoadLibraryExW(wide.as_ptr(), ptr::null_mut(), LOAD_WITH_ALTERED_SEARCH_PATH) };
+        let module = load_library(path.as_os_str(), LOAD_WITH_ALTERED_SEARCH_PATH);
         if module.is_null() {
             let cause = io::Error::last_os_error();
             return Err(if name == GPU_ONLY {
-                format!(
-                    "cannot load the CUDA provider: {cause}\n\
-                     The installed NVIDIA libraries do not fit this build. It needs a recent \
-                     CUDA {major}.x toolkit and cuDNN 9, both on the PATH. Update them, \
-                     or set PROVIDER=cpu.",
-                    major = env!("CUDA_MAJOR")
-                )
+                nvidia_problem(cause)
             } else {
                 format!("cannot load {}: {cause}", path.display())
             }
