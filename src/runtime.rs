@@ -84,6 +84,12 @@ pub fn load(use_gpu: bool) -> Result<(), Box<dyn Error>> {
         let module = load_library(path.as_os_str(), LOAD_WITH_ALTERED_SEARCH_PATH);
         if module.is_null() {
             let cause = io::Error::last_os_error();
+            // 1114 = ERROR_DLL_INIT_FAILED: all imports were resolved, which is what this
+            // check is about. The provider's start-up code then fails because it expects
+            // ONNX Runtime to have registered itself first, which happens on the real load.
+            if name == GPU_ONLY && cause.raw_os_error() == Some(1114) {
+                continue;
+            }
             return Err(if name == GPU_ONLY {
                 nvidia_problem(cause)
             } else {
