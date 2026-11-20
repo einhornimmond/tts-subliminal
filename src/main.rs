@@ -5,7 +5,7 @@ use sherpa_onnx::{
 use std::{
     env,
     error::Error,
-    f32::consts::TAU,
+    f64::consts::TAU,
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -23,7 +23,7 @@ const MODELS: &[(&str, &str)] = &[
     ("vits-piper-en_GB-alba-medium", "Piper Alba, British female, 67 MB, fast"),
     ("kokoro-en-v0_19", "Kokoro, 11 US/UK voices, 320 MB, most natural"),
 ];
-const CARRIER_HZ: f32 = 180.0;
+const CARRIER_HZ: f64 = 180.0;
 
 fn var<T: FromStr>(key: &str, default: T) -> T {
     env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
@@ -100,44 +100,91 @@ fn load_tts(model_dir: &Path, provider: &str) -> Res<OfflineTts> {
         .ok_or_else(|| format!("could not load the model in {}", model_dir.display()).into())
 }
 
-/// Beat frequency over the track (0..1): theta 7 Hz sinks to delta 2 Hz (deep sleep)
-/// by the middle, then rises to theta 5 Hz (dreaming).
-fn beat_hz(progress: f32) -> f32 {
-    if progress < 0.5 {
-        7.0 - 10.0 * progress
-    } else {
-        2.0 + 6.0 * (progress - 0.5)
-    }
+/// Beat schedule of a mode: (minute, beat Hz) key points, linear in between.
+/// The last minute is the track length.
+type Schedule = &'static [(f64, f64)];
+
+const MODES: &[(&str, Schedule)] = &[
+    // An idealized 6 h night: four 90-minute cycles. Deep sleep (N3, delta) is long in the
+    // first cycles and gone by the last; REM (theta) grows from 5 to 35 minutes.
+    (
+        "sleep",
+        &[
+            (0.0, 8.0),   // relaxed, eyes closed (alpha)
+            (15.0, 5.0),  // drifting off (theta)
+            (30.0, 2.0),  // cycle 1: deep sleep ...
+            (70.0, 2.0),  // ... for 40 min
+            (80.0, 4.5),  // light sleep
+            (85.0, 6.0),  // first, short REM
+            (90.0, 6.0),
+            (100.0, 4.5), // cycle 2: light sleep
+            (115.0, 2.0), // deep sleep, 30 min
+            (145.0, 2.0),
+            (155.0, 4.5),
+            (160.0, 6.0), // REM, 20 min
+            (180.0, 6.0),
+            (190.0, 4.5), // cycle 3: light sleep
+            (205.0, 3.0), // last, shallow deep sleep, 15 min
+            (220.0, 3.0),
+            (230.0, 4.5),
+            (240.0, 6.0), // REM, 30 min
+            (270.0, 6.0),
+            (280.0, 4.5), // cycle 4: light sleep only
+            (310.0, 4.5),
+            (315.0, 6.0), // REM, 35 min
+            (350.0, 6.0),
+            (360.0, 10.0), // rise toward waking (alpha)
+        ],
+    ),
+    ("work", &[(0.0, 15.0), (30.0, 15.0)]), // low beta: focused attention
+    ("meditate", &[(0.0, 10.0), (5.0, 6.0), (30.0, 6.0)]), // alpha settling into theta
+    ("active", &[(0.0, 20.0), (30.0, 20.0)]), // beta: alert and energetic
+];
+
+fn beat_hz(schedule: Schedule, minute: f64) -> f64 {
+    let i = schedule.partition_point(|p| p.0 <= minute).clamp(1, schedule.len() - 1);
+    let ((m0, hz0), (m1, hz1)) = (schedule[i - 1], schedule[i]);
+    hz0 + (hz1 - hz0) * ((minute - m0) / (m1 - m0)).clamp(0.0, 1.0)
 }
 
-/// Mono track: looping quiet voice under a monaural beat (two tones summed in one channel).
-fn mix(clips: &[Vec<f32>], sr: usize, minutes: f32, voice_db: f32) -> Vec<f32> {
-    let n = (minutes * 60.0 * sr as f32) as usize;
+/// One loop of the voice: all affirmations in order with a short pause, stacked `layers`
+/// times at evenly spaced offsets. Dividing by sqrt(layers) keeps the overall level the same.
+fn voice_bed(clips: &[Vec<f32>], sr: usize, layers: usize) -> Vec<f32> {
+    let mut sequence = Vec::new();
+    for clip in clips {
+        sequence.extend_from_slice(clip);
+        sequence.resize(sequence.len() + sr / 2, 0.0);
+    }
+    let n = sequence.len();
+    (0..n)
+        .map(|i| {
+            let stacked: f32 = (0..layers).map(|k| sequence[(i + k * n / layers) % n]).sum();
+            stacked / (layers as f32).sqrt()
+        })
+        .collect()
+}
+
+/// Mono track, sample by sample: the looping quiet voice bed under a monaural beat
+/// (two tones summed in one channel) that follows the schedule.
+fn track(
+    bed: &[f32],
+    sr: usize,
+    schedule: Schedule,
+    voice_db: f32,
+) -> impl Iterator<Item = f32> + '_ {
+    let n = (schedule[schedule.len() - 1].0 * 60.0 * sr as f64) as usize;
     let fade = 5 * sr;
     let gain = 10f32.powf(voice_db / 20.0);
-    let mut out = vec![0.0f32; n];
-
-    let mut pos = fade;
-    'fill: while !clips.is_empty() {
-        for clip in clips {
-            if pos + clip.len() + fade > n {
-                break 'fill;
-            }
-            for (o, s) in out[pos..].iter_mut().zip(clip) {
-                *o = s * gain;
-            }
-            pos += clip.len() + 2 * sr; // 2 s pause between affirmations
-        }
-    }
-
-    let (mut a, mut b) = (0.0f32, 0.0f32);
-    for (i, o) in out.iter_mut().enumerate() {
+    let step = TAU / sr as f64;
+    let (mut a, mut b) = (0.0f64, 0.0f64);
+    (0..n).map(move |i| {
         let envelope = (i.min(n - i) as f32 / fade as f32).min(1.0);
-        a = (a + TAU * CARRIER_HZ / sr as f32) % TAU;
-        b = (b + TAU * (CARRIER_HZ + beat_hz(i as f32 / n as f32)) / sr as f32) % TAU;
-        *o = (*o + 0.25 * (a.sin() + b.sin())) * envelope;
-    }
-    out
+        let minute = i as f64 / (60 * sr) as f64;
+        a = (a + step * CARRIER_HZ) % TAU;
+        b = (b + step * (CARRIER_HZ + beat_hz(schedule, minute))) % TAU;
+        let voice = bed.get(i % bed.len().max(1)).map_or(0.0, |s| s * gain);
+        (voice + 0.25 * (a.sin() + b.sin()) as f32) * envelope
+    })
 }
 
 fn main() -> Res<()> {
@@ -151,6 +198,19 @@ fn main() -> Res<()> {
     if lines.is_empty() {
         return Err(format!("{input} contains no affirmations").into());
     }
+
+    let mode = var("MODE", "sleep".to_string()).trim().to_lowercase();
+    let schedule = MODES
+        .iter()
+        .find(|(name, _)| *name == mode)
+        .ok_or_else(|| format!("unknown MODE `{mode}`, use sleep, work, meditate or active"))?
+        .1;
+    let speed: f32 = var("SPEED", 2.0);
+    let layers: usize = var("LAYERS", 3).max(1);
+    println!(
+        "Mode: {mode} ({} min), voice speed {speed}x, layers: {layers}",
+        schedule[schedule.len() - 1].0
+    );
 
     let model_path = PathBuf::from(var("MODEL_PATH", "models".to_string()));
     fs::create_dir_all(&model_path)?;
@@ -170,7 +230,7 @@ fn main() -> Res<()> {
     }
     let tts = load_tts(&model_dir, &provider)?;
 
-    let config = GenerationConfig { sid: var("SPEAKER", 0), ..Default::default() };
+    let config = GenerationConfig { sid: var("SPEAKER", 0), speed, ..Default::default() };
     // One shared model, one worker per core; each worker pulls the next line.
     // On the GPU a single worker is enough, more would only fight over VRAM.
     let workers = if provider == "cpu" {
@@ -208,7 +268,8 @@ fn main() -> Res<()> {
     let clips: Vec<Vec<f32>> = clips.into_iter().map(|(_, clip)| clip).collect();
 
     let sr = tts.sample_rate() as u32;
-    let track = mix(&clips, sr as usize, var("MINUTES", 30.0), var("VOICE_DB", -30.0));
+    let bed = voice_bed(&clips, sr as usize, layers);
+    println!("Voice loop: {:.1} s", bed.len() as f32 / sr as f32);
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate: sr,
@@ -216,7 +277,7 @@ fn main() -> Res<()> {
         sample_format: hound::SampleFormat::Int,
     };
     let mut wav = hound::WavWriter::create(output, spec)?;
-    for s in track {
+    for s in track(&bed, sr as usize, schedule, var("VOICE_DB", -30.0)) {
         wav.write_sample((s.clamp(-1.0, 1.0) * 32767.0) as i16)?;
     }
     wav.finalize()?;
@@ -228,22 +289,58 @@ fn main() -> Res<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn beat_stays_in_sleep_range() {
-        assert_eq!(beat_hz(0.0), 7.0);
-        assert_eq!(beat_hz(0.5), 2.0);
-        assert_eq!(beat_hz(1.0), 5.0);
+    fn schedule(mode: &str) -> Schedule {
+        MODES.iter().find(|m| m.0 == mode).unwrap().1
     }
 
     #[test]
-    fn mix_loops_voice_and_never_clips() {
+    fn schedules_are_ordered_and_have_the_promised_length() {
+        for (name, points) in MODES {
+            assert!(points.windows(2).all(|w| w[0].0 < w[1].0), "{name}: minutes must increase");
+            assert!(points.iter().all(|p| (0.5..=40.0).contains(&p.1)), "{name}: beat range");
+            let minutes = if *name == "sleep" { 360.0 } else { 30.0 };
+            assert_eq!(points[points.len() - 1].0, minutes, "{name}: length");
+        }
+    }
+
+    #[test]
+    fn sleep_beat_follows_the_cycles() {
+        let hz = |minute| beat_hz(schedule("sleep"), minute);
+        assert_eq!(hz(0.0), 8.0);
+        assert_eq!(hz(50.0), 2.0); // deep sleep in cycle 1
+        assert_eq!(hz(22.5), 3.5); // halfway between two key points
+        assert_eq!(hz(170.0), 6.0); // REM in cycle 2
+        assert_eq!(hz(300.0), 4.5); // no deep sleep in cycle 4
+        assert_eq!(hz(360.0), 10.0);
+        assert_eq!(hz(999.0), 10.0); // past the end: stays at the last value
+    }
+
+    #[test]
+    fn voice_bed_stacks_layers_at_constant_level() {
         let sr = 1000;
-        let track = mix(&[vec![1.0; sr]], sr, 1.0, -30.0);
-        assert_eq!(track.len(), 60 * sr);
-        assert!(track.iter().all(|s| s.abs() <= 0.6));
-        assert_eq!(track[0], 0.0); // fades in from silence
-        // voice repeats: a second copy sits 3 s (1 s clip + 2 s pause) after the first
-        let voiced = |at: usize| mix(&[vec![1.0; sr]], sr, 1.0, -30.0)[at] != mix(&[], sr, 1.0, -30.0)[at];
-        assert!(voiced(5 * sr + 10) && voiced(8 * sr + 10) && !voiced(6 * sr + 500));
+        let clips = [vec![1.0; sr], vec![0.5; sr]];
+        let single = voice_bed(&clips, sr, 1);
+        assert_eq!(single.len(), 3 * sr); // two clips, each followed by a 0.5 s pause
+        assert_eq!((single[0], single[sr + 10], single[sr + 600]), (0.0 + 1.0, 0.0, 0.5));
+
+        let double = voice_bed(&clips, sr, 2);
+        assert_eq!(double.len(), single.len());
+        // second layer is shifted by half the loop: clip 1 overlaps the second clip
+        assert_eq!(double[100], (1.0 + 0.5) / 2f32.sqrt());
+        let power = |bed: &[f32]| bed.iter().map(|s| s * s).sum::<f32>();
+        assert!(power(&double) >= power(&single)); // never quieter than one layer
+    }
+
+    #[test]
+    fn track_has_the_mode_length_fades_in_and_never_clips() {
+        let sr = 100;
+        let bed = voice_bed(&[vec![1.0; sr]], sr, 3);
+        let samples: Vec<f32> = track(&bed, sr, schedule("work"), -30.0).collect();
+        assert_eq!(samples.len(), 30 * 60 * sr);
+        assert_eq!(samples[0], 0.0);
+        assert!(samples.iter().all(|s| s.abs() <= 0.6));
+        // the voice is in there: differs from the beat alone
+        let beat_only: Vec<f32> = track(&[], sr, schedule("work"), -30.0).collect();
+        assert_ne!(samples[10 * sr + 5], beat_only[10 * sr + 5]);
     }
 }

@@ -1,8 +1,9 @@
 # tts_subliminal
 
 Turns a list of English affirmations into a subliminal audio track: a locally
-generated TTS voice plays very quietly under monaural beats tuned for sleeping
-and dreaming.
+generated TTS voice, sped up and layered, plays very quietly under monaural
+beats. Four modes set the beats for sleeping, working, meditating or active
+tasks.
 
 Everything runs offline on your own machine. Only the speech model is
 downloaded once on first start.
@@ -55,26 +56,68 @@ Settings live in a `.env` file in the working directory. Copy `.env.dist` to
 | `MODEL_PATH` | `models` | Folder that holds the TTS model |
 | `PROVIDER` | `cpu` (`cuda` in a CUDA build) | `cpu` or `cuda` (see below) |
 | `VOICE_DB` | `-30` | Voice level in dB; lower = more hidden |
-| `MINUTES` | `30` | Track length; the affirmations repeat |
+| `MODE` | `sleep` | `sleep`, `work`, `meditate` or `active` (see below) |
+| `SPEED` | `2` | Speaking rate of the voice; 1 = normal |
+| `LAYERS` | `3` | Copies of the voice stacked on top of each other; 1 = none |
 | `SPEAKER` | `0` | Speaker id for multi-voice models (Kokoro: 0–10) |
 
-Invalid values are silently replaced by the default.
+Invalid values are silently replaced by the default, except for `MODE`:
+an unknown mode stops the program.
+
+## Modes
+
+The mode sets the track length and how the beat frequency moves.
+
+| Mode | Length | Beat frequency |
+|---|---|---|
+| `sleep` | 6 h | follows four sleep cycles, see below |
+| `work` | 30 min | 15 Hz (low beta, focused attention) |
+| `meditate` | 30 min | 10 Hz falling to 6 Hz in the first 5 min (alpha into theta) |
+| `active` | 30 min | 20 Hz (beta, alert; for chores and other active tasks) |
+
+The sleep track follows the textbook pattern of a healthy night: four cycles
+of 90 minutes, with deep sleep concentrated in the first cycles and REM
+phases that grow toward the morning.
+
+| Cycle | Time | Deep sleep (2–3 Hz, delta) | REM (6 Hz, theta) |
+|---|---|---|---|
+| 1 | 0:00–1:30 | 40 min, after 30 min of falling asleep from 8 Hz | 5 min |
+| 2 | 1:30–3:00 | 30 min | 20 min |
+| 3 | 3:00–4:30 | 15 min, shallower (3 Hz) | 30 min |
+| 4 | 4:30–6:00 | none | 35 min, then a rise to 10 Hz for waking |
+
+Between these phases the beat passes through light sleep at 4.5 Hz. The exact
+key points are the `MODES` table in `src/main.rs`.
+
+Real nights differ from person to person and from night to night, and the
+track cannot know when you actually fall asleep. That beats steer sleep
+stages, focus or mood is not established.
 
 ## The audio
 
 - **Format:** mono WAV, 16 bit, at the model's sample rate (Piper 22.05 kHz,
-  Kokoro 24 kHz).
-- **Voice:** the affirmations play in order with a 2 s pause and start over
-  until the track is full.
+  Kokoro 24 kHz). A sleep track is about 1 GB.
+- **Voice:** the affirmations are spoken in order at `SPEED` times the normal
+  rate, with a 0.5 s pause in between, and loop for the whole track. The
+  program prints how long one loop takes.
+- **Layers:** the loop is stacked `LAYERS` times, each copy shifted by an
+  equal share of the loop, so several affirmations sound at once. The overall
+  voice level stays the same whatever the number of layers.
 - **Monaural beats:** two tones around 180 Hz are summed in one channel, so
   they work over speakers too, not only over headphones.
-- **Progression:** the beat frequency falls from 7 Hz (theta, falling asleep)
-  to 2 Hz (delta, deep sleep) by the middle of the track, then rises to 5 Hz
-  (theta, dreaming) by the end. Start and end fade in and out over 5 s each.
+- **Fades:** start and end fade in and out over 5 s each.
 
 Whether the voice really sits below the hearing threshold depends on your
-headphones and playback volume, so tune `VOICE_DB` by ear. The scientific
-evidence for the effects of monaural beats and subliminals is weak.
+headphones and playback volume, so tune `VOICE_DB` by ear.
+
+### How fast, how many layers
+
+There is no agreed limit among people who make subliminals, and no research
+that sets one. Hobbyist guides most often name about twice the normal speed as
+the ceiling and advise a few layers that stay distinguishable, on the grounds
+that more turns the voice into noise. The defaults (`SPEED=2`, `LAYERS=3`) sit
+at that point. Higher values are possible; nothing shows that they work
+better, or that subliminal audio changes behavior at all.
 
 ## CUDA
 
