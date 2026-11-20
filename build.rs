@@ -129,8 +129,12 @@ fn build_onnxruntime(target_dir: &Path, major: u32) -> PathBuf {
 
     let mut build_bat = Command::new(source.join("build.bat"));
     build_bat
-        .args(["--config", "Release", "--build_shared_lib", "--parallel", "--skip_tests"])
+        .args(["--config", "Release", "--build_shared_lib", "--skip_tests"])
         .args(["--compile_no_warning_as_error", "--use_cuda"])
+        // A plain --parallel starts one compiler per logical core, each CUDA one with 4 nvcc
+        // threads on top; on 32 cores that ate more than 64 GB of RAM and crashed Windows.
+        // shortcut: fixed job count, make it depend on the installed RAM if 8 is still too much
+        .args(["--parallel", "8", "--nvcc_threads", "1"])
         .arg("--cuda_home")
         .arg(&cuda_home)
         .arg("--cudnn_home")
