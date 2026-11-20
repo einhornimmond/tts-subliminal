@@ -92,6 +92,26 @@ fn cudnn_home(cuda_home: &Path, major: u32, target_dir: &Path) -> PathBuf {
     flat
 }
 
+/// Compute capabilities of the installed NVIDIA cards as CMake wants them: "8.6" -> "86",
+/// several cards joined by ";". None if nvidia-smi is missing or too old to tell.
+fn gpu_architectures() -> Option<String> {
+    let output = Command::new("nvidia-smi")
+        .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    parse_architectures(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_architectures(smi_output: &str) -> Option<String> {
+    let mut archs: Vec<String> = smi_output.lines().map(|line| line.trim().replace('.', "")).collect();
+    archs.retain(|arch| !arch.is_empty());
+    archs.sort();
+    archs.dedup();
+    let valid = !archs.is_empty() && archs.iter().all(|arch| arch.parse::<u32>().is_ok());
+    valid.then(|| archs.join(";"))
+}
+
 /// Compiles ONNX Runtime against the installed CUDA and cuDNN (takes a long time) and
 /// returns the folder with the resulting DLLs.
 fn build_onnxruntime(target_dir: &Path, major: u32) -> PathBuf {
@@ -150,11 +170,28 @@ fn build_onnxruntime(target_dir: &Path, major: u32) -> PathBuf {
             build_bat.args(["--cuda_version", version]);
         }
     }
+    // Compile the GPU kernels only for the installed cards instead of for every generation
+    // (seven to nine of them). The resulting DLL then runs on these cards only.
+    match gpu_architectures() {
+        Some(archs) => {
+            println!("cargo:warning=compiling the CUDA kernels for GPU architecture {archs} only");
+            build_bat.arg("--cmake_extra_defines").arg(format!("CMAKE_CUDA_ARCHITECTURES={archs}"));
+        }
+        None => println!(
+            "cargo:warning=nvidia-smi did not report the GPU architecture; compiling for all"
+        ),
+    }
     run(&mut build_bat, "the ONNX Runtime build");
     build.join("Release").join("Release")
 }
 
 fn main() {
+    // self-check of the nvidia-smi parsing; build scripts have no test runner
+    assert_eq!(parse_architectures("8.6\r\n").as_deref(), Some("86"));
+    assert_eq!(parse_architectures("12.0\n8.6\n8.6\n").as_deref(), Some("120;86"));
+    assert_eq!(parse_architectures("[N/A]\n"), None);
+    assert_eq!(parse_architectures(""), None);
+
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=CUDA_PATH");
     println!("cargo:rerun-if-env-changed=CUDNN_HOME");

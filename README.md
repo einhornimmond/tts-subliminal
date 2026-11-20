@@ -196,6 +196,11 @@ The source goes to `target\ort-src` (about 800 MB), the build to
 `target\cuda-runtime-source`. Later builds reuse that folder; delete it to
 compile again.
 
+The GPU kernels are compiled only for the graphics cards in the build machine
+(asked from `nvidia-smi`), not for every GPU generation. This shortens the
+build a lot, but the resulting `.exe` then runs on those GPU generations only.
+The build uses 8 parallel jobs to keep the memory use in check.
+
 ## Notes
 
 - **Version pin:** `sherpa-onnx` is pinned to 1.13.8. From 2.0 on, the built-in
