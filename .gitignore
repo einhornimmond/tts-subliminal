@@ -9,3 +9,6 @@
 
 # generated audio
 *.wav
+
+# CUDA runtime unpacked by the program on first start
+tts_subliminal_runtime/

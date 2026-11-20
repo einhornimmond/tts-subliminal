@@ -14,6 +14,9 @@ use std::{
     thread,
 };
 
+#[cfg(all(windows, feature = "cuda"))]
+mod runtime;
+
 type Res<T> = Result<T, Box<dyn Error>>;
 
 const BASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/";
@@ -228,6 +231,8 @@ fn main() -> Res<()> {
                     Rebuild with `cargo build --release --features cuda`."
             .into());
     }
+    #[cfg(all(windows, feature = "cuda"))]
+    runtime::load(provider == "cuda")?;
     let tts = load_tts(&model_dir, &provider)?;
 
     let config = GenerationConfig { sid: var("SPEAKER", 0), speed, ..Default::default() };

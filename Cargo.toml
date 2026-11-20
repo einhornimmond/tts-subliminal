@@ -5,16 +5,18 @@ edition = "2021"
 license = "GPL-3.0-or-later"
 
 [features]
-# Windows only: `cargo build --release --features cuda`. build.rs downloads the CUDA runtime
-# DLLs (about 570 MB, once) and puts them next to the .exe. Without it: one static CPU binary.
+# Windows only: `cargo build --release --features cuda`. build.rs detects the installed CUDA
+# version (12 or 13), downloads the matching runtime once (about 500 MB) and embeds it in the
+# .exe. Without the feature: one small static CPU binary.
 cuda = ["sherpa-onnx/shared"]
+# Experimental: like `cuda`, but compiles ONNX Runtime from source against the installed
+# CUDA and cuDNN instead of downloading it. Takes very long; see README.
+cuda-source = ["cuda"]
 
 [dependencies]
 # shortcut: pinned to the last release with built-in espeak-ng phonemizer (2.x dropped it,
 # Piper/Kokoro then need an external one); upgrade when switching to Supertonic or lexicon models.
 sherpa-onnx = { version = "=1.13.8", default-features = false }
-# direct dependency only so that its build script runs before ours (see build.rs)
-sherpa-onnx-sys = { version = "=1.13.8", default-features = false }
 # same versions sherpa-onnx-sys already builds with
 ureq = "2.12"
 bzip2 = "0.4"

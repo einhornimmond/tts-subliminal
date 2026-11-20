@@ -121,23 +121,80 @@ better, or that subliminal audio changes behavior at all.
 
 ## CUDA
 
-Windows only, and so far tested only up to the point of producing the files:
+Windows only. The build steps below have been checked on Linux as far as
+possible; linking and running on the GPU have not been tested yet.
 
 ```
 cargo build --release --features cuda
 ```
 
-The build downloads the CUDA runtime of sherpa-onnx once (about 570 MB, so the
-first build sits at the build-script step for a few minutes) and puts seven
-DLLs next to `target\release\tts_subliminal.exe`. The program then uses the
-GPU by default; `PROVIDER=cpu` in `.env` switches back. To move the program
-somewhere else, copy the `.exe` together with those DLLs.
+What the build does:
 
-Requirements on the machine: an NVIDIA GPU with a current driver, plus the
-CUDA 12 and cuDNN 9 runtime libraries installed and on the `PATH`.
+1. It looks for an installed CUDA runtime (`cudart64_13.dll` or
+   `cudart64_12.dll`), first in `%CUDA_PATH%\bin`, then on the `PATH`, and
+   prints which one it uses.
+2. It downloads the matching sherpa-onnx CUDA runtime once (570 MB for
+   CUDA 12, 455 MB for CUDA 13).
+3. It embeds that runtime in `target\release\tts_subliminal.exe`.
 
-A plain `cargo build --release` afterwards goes back to the static CPU binary.
-The DLLs left in `target\release` do no harm; that build does not load them.
+The result is one file of about 520 MB (290 MB for CUDA 13); compiling it
+needs about 6 GB of RAM. On first start the program unpacks its runtime into a
+folder `tts_subliminal_runtime` beside the `.exe` and loads it from there.
+It then uses the GPU by default; `PROVIDER=cpu` in `.env` switches back.
+
+Not included, and required on the machine that runs the program:
+
+- an NVIDIA GPU with a current driver,
+- the CUDA Toolkit of the same major version the build found (12 or 13), in a
+  recent minor release,
+- cuDNN 9 for that CUDA version, with its `bin` folder on the `PATH`.
+
+Only these two prebuilt runtimes exist. The build picks the one for your major
+version; it cannot adapt to an older minor release. If the installed CUDA is
+too old, the program stops with `cannot load the CUDA provider` and says what
+to update.
+
+The DLLs that the build also leaves in `target\release` are CPU versions from
+the import library and are not used; only the `.exe` needs to be copied.
+
+### Experimental: ONNX Runtime built from source
+
+If your installed CUDA is too old for the prebuilt runtime and you do not want
+to update it, this option compiles ONNX Runtime 1.28.2 against the CUDA and
+cuDNN you have. The compile step itself has never been run; expect to debug it.
+
+```
+cargo build --release --features cuda-source -vv
+```
+
+`-vv` shows the output of the ONNX Runtime build, which is otherwise silent
+for its whole duration.
+
+Requirements, in addition to those of the normal CUDA build:
+
+- Visual Studio 2022 with the C++ workload, CMake, Python and git,
+- `CUDA_PATH` pointing at the CUDA Toolkit folder (the installer sets it),
+- cuDNN 9 with headers and import libraries. The build looks in `CUDNN_HOME`,
+  then in the CUDA Toolkit folder, then in the installer's default folder
+  `%ProgramFiles%\NVIDIA\CUDNN`,
+- a lot of time and disk space. With many cores and less than 64 GB of RAM the
+  CUDA compiler can run out of memory.
+
+ONNX Runtime documents CUDA 12.x with cuDNN 9 as what it is built and tested
+with; anything else may fail to compile.
+
+Where the source comes from: the build fetches one exact commit,
+`33ca9628233dc8f002435e868d4c2e9f82766ca1`, which the Software Heritage
+archive records as the tag `v1.28.2` of `microsoft/onnxruntime`. It tries the
+official repository first and Intel's fork (`intel/onnxruntime`) second. Git
+verifies the content against that hash, so both deliver the same source. The
+fallback exists because the official repository returned 404 on GitHub when
+this was written (November 2026).
+
+The source goes to `target\ort-src` (about 800 MB), the build to
+`target\ort-build`, and the DLLs are collected in
+`target\cuda-runtime-source`. Later builds reuse that folder; delete it to
+compile again.
 
 ## Notes
 
