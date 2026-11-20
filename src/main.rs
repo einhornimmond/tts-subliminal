@@ -190,6 +190,30 @@ fn track(
     })
 }
 
+/// The texts to synthesize, one call each. Per line: one text per non-empty line.
+/// Per block (GPU): lines up to the next empty line become one text, because the card
+/// handles few long texts better than many short ones. Each line still ends a sentence.
+fn texts(input: &str, per_block: bool) -> Vec<String> {
+    let mut texts: Vec<String> = Vec::new();
+    let mut block_open = false;
+    for line in input.lines().map(str::trim) {
+        if line.is_empty() {
+            block_open = false;
+        } else if per_block && block_open {
+            let text = texts.last_mut().unwrap();
+            if !text.ends_with(['.', '!', '?', ',', ';', ':']) {
+                text.push('.');
+            }
+            text.push(' ');
+            text.push_str(line);
+        } else {
+            texts.push(line.to_string());
+            block_open = true;
+        }
+    }
+    texts
+}
+
 fn main() -> Res<()> {
     dotenvy::dotenv().ok();
     let args: Vec<String> = env::args().collect();
@@ -197,8 +221,7 @@ fn main() -> Res<()> {
     let output = args.get(2).map_or("subliminal.wav", String::as_str);
 
     let text = fs::read_to_string(input)?;
-    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-    if lines.is_empty() {
+    if text.trim().is_empty() {
         return Err(format!("{input} contains no affirmations").into());
     }
 
@@ -234,6 +257,7 @@ fn main() -> Res<()> {
     #[cfg(all(windows, feature = "cuda"))]
     runtime::load(provider == "cuda")?;
     let tts = load_tts(&model_dir, &provider)?;
+    let lines = texts(&text, provider != "cpu");
 
     let config = GenerationConfig { sid: var("SPEAKER", 0), speed, ..Default::default() };
     // One shared model; each worker pulls the next line. CPU: one worker per core.
@@ -292,6 +316,14 @@ fn main() -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn texts_are_lines_or_blocks() {
+        let input = "I am calm\r\nI am safe.\n\n  \nI sleep well\n";
+        assert_eq!(texts(input, false), ["I am calm", "I am safe.", "I sleep well"]);
+        assert_eq!(texts(input, true), ["I am calm. I am safe.", "I sleep well"]);
+        assert!(texts(" \n\n", true).is_empty());
+    }
 
     fn schedule(mode: &str) -> Schedule {
         MODES.iter().find(|m| m.0 == mode).unwrap().1

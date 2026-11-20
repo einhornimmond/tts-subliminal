@@ -30,8 +30,11 @@ library automatically and links it statically.
 tts_subliminal <affirmations.txt> [output.wav]
 ```
 
-- `affirmations.txt`: one affirmation per line, in English. Empty lines are
-  ignored. See `affirmations.txt` for an example.
+- `affirmations.txt`: one affirmation per line, in English. See
+  `affirmations.txt` for an example. In CPU mode empty lines are ignored and
+  every line is spoken on its own. With `cuda`, an empty line separates blocks:
+  the lines of a block are sent to the card as one text, which suits a GPU
+  better than many short ones.
 - `output.wav`: optional, defaults to `subliminal.wav`.
 
 If the program finds no model in `MODEL_PATH`, it asks which one to download:
