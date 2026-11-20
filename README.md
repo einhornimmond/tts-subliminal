@@ -60,6 +60,7 @@ Settings live in a `.env` file in the working directory. Copy `.env.dist` to
 | `SPEED` | `2` | Speaking rate of the voice; 1 = normal |
 | `LAYERS` | `3` | Copies of the voice stacked on top of each other; 1 = none |
 | `SPEAKER` | `0` | Speaker id for multi-voice models (Kokoro: 0–10) |
+| `WORKERS` | cores / `4` | Sentences synthesized at the same time: one per CPU core, or 4 with `cuda` |
 
 Invalid values are silently replaced by the default, except for `MODE`:
 an unknown mode stops the program.
@@ -205,9 +206,11 @@ The build uses 8 parallel jobs to keep the memory use in check.
 
 - **Version pin:** `sherpa-onnx` is pinned to 1.13.8. From 2.0 on, the built-in
   phonemizer that the Piper models need is gone.
-- **Speed:** in CPU mode the affirmations are synthesized in parallel, one
-  worker per logical core, so progress lines appear out of order. The track
-  keeps the order of the input file.
+- **Speed:** the affirmations are synthesized in parallel, so progress lines
+  appear out of order; the track keeps the order of the input file. In CPU mode
+  there is one worker per logical core. With `cuda` the model is loaded onto
+  the card once and 4 workers feed it; try other values with `WORKERS`, more
+  workers need more video memory.
 - **Tests:** `cargo test` checks the beat progression and the mixing.
 
 ## License

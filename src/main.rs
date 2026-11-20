@@ -236,13 +236,12 @@ fn main() -> Res<()> {
     let tts = load_tts(&model_dir, &provider)?;
 
     let config = GenerationConfig { sid: var("SPEAKER", 0), speed, ..Default::default() };
-    // One shared model, one worker per core; each worker pulls the next line.
-    // On the GPU a single worker is enough, more would only fight over VRAM.
-    let workers = if provider == "cpu" {
-        thread::available_parallelism().map_or(1, |n| n.get()).min(lines.len())
-    } else {
-        1
-    };
+    // One shared model; each worker pulls the next line. CPU: one worker per core.
+    // GPU: the model sits on the card once and a few workers feed it at the same time.
+    // shortcut: the GPU default of 4 is a guess, measure with WORKERS and adjust it
+    let default_workers =
+        if provider == "cpu" { thread::available_parallelism().map_or(1, |n| n.get()) } else { 4 };
+    let workers = var("WORKERS", default_workers).clamp(1, lines.len().max(1));
     println!("Provider: {provider}, worker threads: {workers}");
     let (next, done) = (AtomicUsize::new(0), AtomicUsize::new(0));
     let finished: Option<Vec<Vec<(usize, Vec<f32>)>>> = thread::scope(|scope| {

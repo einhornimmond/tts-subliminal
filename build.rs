@@ -154,7 +154,7 @@ fn build_onnxruntime(target_dir: &Path, major: u32) -> PathBuf {
         // A plain --parallel starts one compiler per logical core, each CUDA one with 4 nvcc
         // threads on top; on 32 cores that ate more than 64 GB of RAM and crashed Windows.
         // shortcut: fixed job count, make it depend on the installed RAM if 8 is still too much
-        .args(["--parallel", "8", "--nvcc_threads", "1"])
+        .args(["--parallel", "16", "--nvcc_threads", "1"])
         // --skip_tests only skips running the tests, this skips compiling them
         .args(["--cmake_extra_defines", "onnxruntime_BUILD_UNIT_TESTS=OFF"])
         .arg("--cuda_home")
